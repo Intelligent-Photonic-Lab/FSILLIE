@@ -10,7 +10,7 @@ from datasets import LowLightDataset
 from tools import saver
 
 def get_args():
-    parser = argparse.ArgumentParser('Breaking Downing the Darkness')
+    parser = argparse.ArgumentParser('FSILLIE')
     parser.add_argument('--num_gpus', type=int, default=1, help='number of gpus being used')
     parser.add_argument('--num_workers', type=int, default=12, help='num_workers of dataloader')
     parser.add_argument('--batch_size', type=int, default=1, help='The number of images per batch among all devices')
@@ -19,7 +19,7 @@ def get_args():
     parser.add_argument('-m3', '--model3', type=str, default='COL', help='Model3 Name')
     parser.add_argument('-m4', '--model4', type=str, default='DEN', help='Model4 Name')
 
-    parser.add_argument('-m1w', '--model1_weight', type=str, default='./checkpoints/best.pth',
+    parser.add_argument('-mw', '--model_weight', type=str, default='./checkpoints/best.pth',
                         help='Combined Model Weight')
 
     parser.add_argument('--save_extra', default=True, action='store_true', help='save intermediate outputs or not')
@@ -48,7 +48,7 @@ def load_combined_pth(model1, model2, model3, model4, combined_pth_path):
     model3.load_state_dict(state_dict_3)
     model4.load_state_dict(state_dict_4)
 
-class ModelFTSNet(nn.Module):
+class ModelFSINet(nn.Module):
     def __init__(self, model1, model2, model3, model4):
         super().__init__()
         self.eps = 1e-6
@@ -56,46 +56,46 @@ class ModelFTSNet(nn.Module):
         self.model_2net = model2(in_channels=2, out_channels=1)
         self.model_3net = model3(in_channels=6, out_channels=2)
         self.model_4net = model4(in_channels=5, out_channels=1)
-        load_combined_pth(self.model_1net, self.model_2net, self.model_3net, self.model_4net, opt.model1_weight)
+        load_combined_pth(self.model_1net, self.model_2net, self.model_3net, self.model_4net, opt.model_weight)
 
     def noise_syn_exp(self, illumi, strength):
         return torch.exp(-illumi) * strength
 
     def forward(self, image, image_gt):
 
-        texture_in, cb_in, cr_in = torch.split(kornia.color.rgb_to_ycbcr(image), 1, dim=1)
-        texture_gt, _, _ = torch.split(kornia.color.rgb_to_ycbcr(image_gt), 1, dim=1)
+        Y_low, cb_low, cr_low = torch.split(kornia.color.rgb_to_ycbcr(image), 1, dim=1)
+        Y_gt, _, _ = torch.split(kornia.color.rgb_to_ycbcr(image_gt), 1, dim=1)
 
-        texture_in_down = texture_in
-        texture_illumi = self.model_1net(texture_in_down)
-        illumi = texture_illumi
-        texture_illumi = torch.clamp(texture_illumi, 0., 1.)
-        texture_ia = texture_in / torch.clamp_min(texture_illumi, self.eps)
-        texture_nss = []
+
+        Y_illumi = self.model_1net(Y_low)
+        illumi = Y_illumi
+        Y_illumi = torch.clamp(Y_illumi, 0., 1.)
+        Y_ILL = Y_low / torch.clamp_min(Y_illumi, self.eps)
+        Y_nss = []
         makeNoise_k_strength = []
         noise_k_strength = []
 
         for strength in [0, illumi, (2 * illumi), (3 * illumi), (4 * illumi)]:
-            attention = self.noise_syn_exp(texture_illumi, strength=strength)
+            attention = self.noise_syn_exp(Y_illumi, strength=strength)
             makeNoise_k_strength.append(attention)
-            texture_res = self.model_2net(torch.cat([texture_ia, attention], dim=1))
-            noise_k_strength.append(texture_res)
-            texture_ns = texture_ia + texture_res
-            texture_nss.append(texture_ns)
+            Y_res = self.model_2net(torch.cat([Y_ILL, attention], dim=1))
+            noise_k_strength.append(Y_res)
+            Y_ns = Y_ILL + Y_res
+            Y_nss.append(Y_ns)
 
-        texture_nss = torch.cat(texture_nss, dim=1).detach()
-        texture_fd = self.model_4net(texture_nss)
+        Y_nss = torch.cat(Y_nss, dim=1).detach()
+        Y_DEN = self.model_4net(Y_nss)
 
-        image_ia_ycbcr = kornia.color.rgb_to_ycbcr(torch.clamp(image / (texture_illumi + self.eps), 0, 1))
+        image_ia_ycbcr = kornia.color.rgb_to_ycbcr(torch.clamp(image / (Y_illumi + self.eps), 0, 1))
         _, cb_ia, cr_ia = torch.split(image_ia_ycbcr, 1, dim=1)
-        colors = self.model_3net(torch.cat([texture_in, cb_in, cr_in, texture_fd, cb_ia, cr_ia], dim=1))
+        colors = self.model_3net(torch.cat([Y_low, cb_low, cr_low, Y_DEN, cb_ia, cr_ia], dim=1))
 
         cb_out, cr_out = torch.split(colors, 1, dim=1)
         cb_out = torch.clamp(cb_out, 0, 1)
         cr_out = torch.clamp(cr_out, 0, 1)
 
         image_out = kornia.color.ycbcr_to_rgb(
-            torch.cat([texture_fd, cb_out, cr_out], dim=1))
+            torch.cat([Y_DEN, cb_out, cr_out], dim=1))
         image_out = torch.clamp(image_out, 0, 1)
 
         return image_out
@@ -118,7 +118,7 @@ def evaluation(opt):
     model2 = getattr(models_vevid, opt.model2)
     model3 = getattr(models_vevid, opt.model3)
     model4 = getattr(models_vevid, opt.model4)
-    model = ModelFTSNet(model1, model2, model3, model4)
+    model = ModelFSINet(model1, model2, model3, model4)
 
     if opt.num_gpus > 0:
         model = model.cuda()
