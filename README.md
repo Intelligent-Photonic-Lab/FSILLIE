@@ -32,7 +32,4 @@
 
 * Evaluation: ```python eval.py```
   
-### 5. Reference
-
-* This code implementation is based on the algorithm described in the paper "Low-light Image Enhancement via Breaking Down the Darkness"
 
